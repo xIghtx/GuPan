@@ -175,7 +175,7 @@
 <div class="mini-score-grid" id="compareMetrics"></div>
 </div>
 </div>
-<div class="callout warn caveat"><b>주의:</b> 글 하나만 보고 “AI 때문에 정보가 정확히 몇 % 망가졌다”고 단정할 수는 없습니다. 위 점수는 <b>반복, 단어 감소, 언어 섞임처럼 글에서 보이는 변화</b>를 간단히 나타낸 값입니다. 원문 비교도 뜻 전체가 아니라 핵심 단어·숫자·이어지는 표현이 얼마나 남았는지를 비교합니다.</div>
+<div class="callout warn caveat"><b>검사 기준:</b> 반복되는 단어·구절, 특정 단어 쏠림, 언어 이탈, 숫자 반복을 함께 보고 여러 신호가 동시에 나타나면 더 엄격하게 점수를 올립니다.<br><br><b>주의:</b> 글 하나만 보고 “AI 때문에 정보가 정확히 몇 % 망가졌다”고 단정할 수는 없습니다. 위 점수는 <b>반복, 단어 감소, 언어 섞임처럼 글에서 보이는 변화</b>를 간단히 나타낸 값입니다. 원문 비교도 뜻 전체가 아니라 핵심 단어·숫자·이어지는 표현이 얼마나 남았는지를 비교합니다.</div>
 <h3 class="result-heading">어떤 변화가 보이나요?</h3>
 <div class="feature-list" id="featureList"></div>
 <div class="advice" id="advice"></div>
@@ -397,21 +397,70 @@ function tokenize(text){return text.trim().split(/\s+/).map(w=>w.replace(/^[^0-9
 function normToken(w){return w.toLowerCase().replace(/[^0-9a-z가-힣]/g,'')}
 function ngramRepeat(words,n){if(words.length<n)return 0;const grams=[];for(let i=0;i<=words.length-n;i++)grams.push(words.slice(i,i+n).map(normToken).join(' '));return 1-new Set(grams).size/grams.length}
 function features(text){
-  const words=tokenize(text), n=words.length||1, types=new Set(words.map(normToken)).size, ttr=types/n;
+  const words=tokenize(text), n=words.length||1, normalized=words.map(normToken);
+  const counts={};normalized.forEach(k=>{if(k)counts[k]=(counts[k]||0)+1});
+  const types=Object.keys(counts).length, ttr=types/n;
   const rep2=ngramRepeat(words,2), rep3=ngramRepeat(words,3);
-  const counts={};words.forEach(w=>{const k=normToken(w);counts[k]=(counts[k]||0)+1});const dominant=words.length?Math.max(...Object.values(counts))/words.length:0;
+  const sortedCounts=Object.values(counts).sort((a,b)=>b-a);
+  const dominant=words.length?(sortedCounts[0]||0)/words.length:0;
+  const top3=words.length?sortedCounts.slice(0,3).reduce((a,b)=>a+b,0)/words.length:0;
+  const repeatExcess=words.length?sortedCounts.reduce((s,c)=>s+Math.max(0,c-1),0)/words.length:0;
+
   const found=new Set();words.forEach(w=>PARTICLES.forEach(p=>{if(w.length>p.length&&w.endsWith(p))found.add(p)}));
   const particleDiversity=Math.min(found.size/10,1);
-  const letters=text.match(/[A-Za-z가-힣]/g)||[], eng=text.match(/[A-Za-z]/g)||[];const codeSwitch=letters.length?eng.length/letters.length:0;
-  return {words,n:words.length,ttr,rep2,rep3,dominant,particleDiversity,codeSwitch};
+
+  const letters=text.match(/[A-Za-z가-힣]/g)||[], eng=text.match(/[A-Za-z]/g)||[];
+  const codeSwitch=letters.length?eng.length/letters.length:0;
+  const englishTokenRatio=words.length?words.filter(w=>/[A-Za-z]/.test(w)).length/words.length:0;
+
+  const numberList=(text.match(/\d+(?:[.,]\d+)*/g)||[]);
+  const numericRepeat=numberList.length?Math.max(0,(numberList.length-new Set(numberList).size)/numberList.length):0;
+
+  return {words,n:words.length,ttr,rep2,rep3,dominant,top3,repeatExcess,particleDiversity,codeSwitch,englishTokenRatio,numericRepeat};
 }
 function scoreFeatures(f){
-  const lowTtr=Math.max(0,Math.min(1,(0.72-f.ttr)/0.45));
-  const repeat=Math.min(1,f.rep2*.55+f.rep3*.8+Math.max(0,f.dominant-.12)*2.2);
-  const particle=Math.max(0,(.35-f.particleDiversity)/.35);
-  const mixed=Math.min(1,f.codeSwitch/.35);
-  const shortPenalty=f.n<12?.18:0;
-  return Math.round(Math.max(0,Math.min(1,lowTtr*.33+repeat*.35+particle*.14+mixed*.18-shortPenalty))*100);
+  // v4: 기존보다 엄격한 교육용 검사식.
+  // 한 지표만으로 판정하지 않고, 여러 붕괴 신호가 동시에 나타날수록 점수가 더 커진다.
+  const lowTtr=Math.max(0,Math.min(1,(0.77-f.ttr)/0.43));
+
+  // 같은 단어가 글 전체에서 되풀이되고, 상위 몇 단어에 지나치게 몰리는 현상을 강하게 반영
+  const lexicalRepeat=Math.min(1,
+    f.repeatExcess*1.15 +
+    Math.max(0,f.top3-.12)*1.8 +
+    Math.max(0,f.dominant-.07)*2.0
+  );
+
+  // 동일한 2~3단어 덩어리가 다시 등장하는 현상
+  const phraseRepeat=Math.min(1,f.rep2*1.35+f.rep3*1.15);
+
+  // 글자 기준과 단어 기준 중 더 강한 언어 이탈 신호를 사용
+  const languageDrift=Math.min(1,Math.max(f.codeSwitch/.45,f.englishTokenRatio/.42));
+
+  // 같은 숫자·연도가 반복되는 경우도 붕괴 신호로 일부 반영
+  const numberRepeat=Math.min(1,f.numericRepeat);
+
+  let score=
+    lowTtr*.28 +
+    lexicalRepeat*.25 +
+    phraseRepeat*.18 +
+    languageDrift*.18 +
+    numberRepeat*.04;
+
+  // 서로 다른 종류의 이상 신호가 동시에 많이 나타나면 추가 가중치
+  const activeSignals=[
+    lowTtr>.50,
+    lexicalRepeat>.50,
+    phraseRepeat>.25,
+    languageDrift>.45,
+    numberRepeat>.50
+  ].filter(Boolean).length;
+  score+=Math.max(0,activeSignals-2)*.035;
+
+  // 아주 짧은 글은 과대평가 방지
+  if(f.n<12)score*=.72;
+  else if(f.n<20)score*=.88;
+
+  return Math.round(Math.max(0,Math.min(1,score))*100);
 }
 function escapeHTML(s){return String(s).replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]))}
 function extractNumbers(text){return [...new Set((text.match(/\d+(?:[.,]\d+)*(?:\s?(?:%|년|월|일|배|명|개|원|km|m|MB|GB|TB|M|B))?/g)||[]).map(x=>x.trim()))].slice(0,6)}
@@ -474,15 +523,24 @@ function analyze(){
   const text=document.getElementById('textInput').value.trim(), source=document.getElementById('sourceInput').value.trim();
   if(!text){document.getElementById('textInput').focus();return}
   const f=features(text), score=scoreFeatures(f), result=document.getElementById('result');result.classList.add('show');
-  const color=score>=65?'var(--decay)':score>=35?'var(--signal)':'var(--stable)';document.getElementById('scoreNum').textContent=score;document.getElementById('scoreNum').style.color=color;document.getElementById('scoreBar').style.width=score+'%';document.getElementById('scoreBar').style.background=color;
-  const level=score>=65?'큼':score>=35?'보통':'적음';document.getElementById('scoreLabel').textContent=f.n<20?'글이 짧아 참고용으로만 보세요':`글에서 보이는 흐려짐 ${level}`;
+  const color=score>=60?'var(--decay)':score>=30?'var(--signal)':'var(--stable)';document.getElementById('scoreNum').textContent=score;document.getElementById('scoreNum').style.color=color;document.getElementById('scoreBar').style.width=score+'%';document.getElementById('scoreBar').style.background=color;
+  const level=score>=60?'큼':score>=30?'보통':'적음';document.getElementById('scoreLabel').textContent=f.n<20?'글이 짧아 참고용으로만 보세요':`글에서 보이는 흐려짐 ${level}`;
   document.getElementById('collapseInterpretation').textContent=source?`현재 글에서 보이는 흐려짐 정도는 ${score}/100입니다. 오른쪽에는 올린 원문과 직접 비교한 결과를 따로 표시했습니다.`:`현재 글에서 보이는 흐려짐 정도는 ${score}/100입니다. 원문이 없기 때문에 실제 정보가 몇 % 사라졌는지, 그 원인이 AI인지까지는 알 수 없습니다.`;
   document.getElementById('featureList').innerHTML=`
-    <div class="feature"><div class="feature-top"><span>쓰는 단어의 다양함</span><span>${(f.ttr*100).toFixed(1)}%</span></div><p>서로 다른 단어를 얼마나 다양하게 썼는지 봅니다. 짧은 글은 참고용으로 보세요.</p></div>
+    <div class="feature"><div class="feature-top"><span>쓰는 단어의 다양함</span><span>${(f.ttr*100).toFixed(1)}%</span></div><p>서로 다른 단어를 얼마나 다양하게 썼는지 봅니다. 낮을수록 같은 단어에 몰렸을 가능성이 큽니다.</p></div>
+    <div class="feature"><div class="feature-top"><span>같은 단어가 다시 나온 정도</span><span>${(f.repeatExcess*100).toFixed(1)}%</span></div><p>이미 한 번 나온 단어가 글 전체에서 얼마나 계속 되풀이됐는지 봅니다.</p></div>
     <div class="feature"><div class="feature-top"><span>이어지는 두 단어의 반복</span><span>${(f.rep2*100).toFixed(1)}%</span></div><p>같은 두 단어 조합이 얼마나 자주 되풀이되는지 봅니다.</p></div>
-    <div class="feature"><div class="feature-top"><span>가장 많이 나온 단어의 비율</span><span>${(f.dominant*100).toFixed(1)}%</span></div><p>한 단어만 지나치게 많이 반복되는지 확인합니다.</p></div>
-    <div class="feature"><div class="feature-top"><span>영어가 섞인 정도</span><span>${(f.codeSwitch*100).toFixed(1)}%</span></div><p>한글과 영어 글자 중 영어가 얼마나 많이 섞였는지 봅니다.</p></div>`;
-  const tips=[];if(f.n<20)tips.push('20단어 이상 텍스트를 넣으면 단어 다양함과 반복 정도를 더 안정적으로 볼 수 있습니다.');if(f.rep2>.18||f.dominant>.22)tips.push('반복이 많습니다. 원문을 찾을 때 흔한 말보다 숫자·사람 이름·기관 이름·구체적인 표현을 검색 단서로 쓰세요.');if(f.codeSwitch>.18)tips.push('영어가 많이 섞였습니다. 한국어 핵심 단어와 영어 표현을 따로 검색한 뒤 같은 원문을 가리키는지 확인하세요.');if(f.ttr<.48)tips.push('쓰는 단어의 종류가 적습니다. AI가 다시 쓰는 과정에서 구체적인 내용이 흔한 말로 바뀌었는지 원문과 비교해 보세요.');if(!tips.length)tips.push('눈에 띄는 반복이나 단어 감소는 적습니다. 그래도 내용이 사실인지 여부는 원문을 찾아 따로 확인해야 합니다.');document.getElementById('advice').innerHTML=tips.map(t=>`<div>${escapeHTML(t)}</div>`).join('');
+    <div class="feature"><div class="feature-top"><span>자주 쓰인 3개 단어의 쏠림</span><span>${(f.top3*100).toFixed(1)}%</span></div><p>몇 개의 단어만 글 전체를 지나치게 차지하는지 확인합니다.</p></div>
+    <div class="feature"><div class="feature-top"><span>영어가 섞인 정도</span><span>${(Math.max(f.codeSwitch,f.englishTokenRatio)*100).toFixed(1)}%</span></div><p>한국어 글에서 영어 표현이 얼마나 크게 늘어났는지 살펴봅니다.</p></div>
+    <div class="feature"><div class="feature-top"><span>숫자·연도가 반복된 정도</span><span>${(f.numericRepeat*100).toFixed(1)}%</span></div><p>같은 숫자나 연도가 의미 없이 여러 번 반복되는지도 확인합니다.</p></div>`;
+  const tips=[];
+  if(f.n<20)tips.push('20단어 이상 텍스트를 넣으면 단어 다양함과 반복 정도를 더 안정적으로 볼 수 있습니다.');
+  if(f.repeatExcess>.30||f.rep2>.12||f.top3>.28)tips.push('같은 단어나 표현이 많이 되풀이됩니다. 반복 학습 과정에서 표현의 폭이 줄어든 신호일 수 있습니다.');
+  if(Math.max(f.codeSwitch,f.englishTokenRatio)>.15)tips.push('영어가 많이 섞였습니다. 한국어 핵심 단어와 영어 표현을 따로 검색한 뒤 같은 원문을 가리키는지 확인하세요.');
+  if(f.numericRepeat>.35)tips.push('같은 숫자·연도가 반복됩니다. 숫자 자체가 맞더라도 문맥이 사라졌을 수 있으므로 원출처에서 해당 수치의 의미를 확인하세요.');
+  if(f.ttr<.55)tips.push('쓰는 단어의 종류가 적습니다. 구체적인 내용이 흔한 말로 바뀌었는지 원문과 비교해 보세요.');
+  if(!tips.length)tips.push('눈에 띄는 반복이나 단어 감소는 적습니다. 그래도 내용이 사실인지 여부는 원문을 찾아 따로 확인해야 합니다.');
+  document.getElementById('advice').innerHTML=tips.map(t=>`<div>${escapeHTML(t)}</div>`).join('');
   renderComparison(text,source);renderSearchGuide(text);
 }
 
