@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>구라 판별기 — 언어모델 붕괴 탐지</title>
+<style>
+  :root{
+    --bg:#0B0D10; --panel:#14171B; --text:#E8E6E1; --dim:#8A8F98;
+    --safe:#4FD1A5; --warn:#F2A93B; --danger:#E85C4A;
+    --mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+    --sans: -apple-system, 'Pretendard', 'Apple SD Gothic Neo', sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); padding:24px; }
+  .wrap{ max-width:760px; margin:0 auto; }
+  .eyebrow{ font-family:var(--mono); font-size:12px; letter-spacing:0.15em; color:var(--dim); text-transform:uppercase; margin-bottom:8px; }
+  h1{ font-family:var(--mono); font-size:28px; margin:0 0 6px; font-weight:700; letter-spacing:-0.01em; }
+  h2{ font-family:var(--mono); font-size:16px; margin:0 0 4px; color:var(--text); }
+  .sub{ color:var(--dim); font-size:14px; margin-bottom:28px; line-height:1.6; }
+  .card{ background:var(--panel); border:1px solid #23262B; border-radius:12px; padding:24px; margin-bottom:24px; transition:filter 0.4s ease, border-color 0.4s ease; }
+  textarea{ width:100%; min-height:120px; background:#0E1013; color:var(--text); border:1px solid #23262B; border-radius:8px; padding:14px; font-family:var(--sans); font-size:14px; line-height:1.6; resize:vertical; }
+  textarea:focus{ outline:none; border-color:var(--warn); }
+  button{ margin-top:12px; background:var(--text); color:var(--bg); border:none; font-family:var(--mono); font-weight:700; font-size:13px; padding:12px 20px; border-radius:8px; cursor:pointer; letter-spacing:0.02em; }
+  button:hover{ opacity:0.85; }
+  .result{ margin-top:24px; display:none; }
+  .result.show{ display:block; }
+  .score-row{ display:flex; align-items:baseline; gap:12px; margin-bottom:6px; }
+  .score-num{ font-family:var(--mono); font-size:42px; font-weight:700; }
+  .score-label{ color:var(--dim); font-size:13px; font-family:var(--mono); }
+  .bar{ height:8px; background:#0E1013; border-radius:4px; overflow:hidden; margin-bottom:20px; }
+  .bar-fill{ height:100%; transition:width 0.6s ease, background 0.6s ease; }
+  .features{ display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; margin-bottom:20px; }
+  .feat{ font-family:var(--mono); font-size:12px; color:var(--dim); display:flex; justify-content:space-between; border-bottom:1px dashed #23262B; padding-bottom:6px; }
+  .feat span:last-child{ color:var(--text); }
+  .tips{ list-style:none; padding:0; margin:0; }
+  .tips li{ font-size:13px; line-height:1.6; padding:10px 12px; margin-bottom:8px; background:#0E1013; border-left:3px solid var(--warn); border-radius:4px; }
+  .glitch h1{ animation: glitch 0.25s infinite; }
+  @keyframes glitch{
+    0%{ text-shadow: 2px 0 var(--danger), -2px 0 var(--safe); }
+    50%{ text-shadow: -2px 0 var(--danger), 2px 0 var(--safe); }
+    100%{ text-shadow: 2px 0 var(--danger), -2px 0 var(--safe); }
+  }
+  .legend{ display:flex; gap:20px; font-family:var(--mono); font-size:12px; margin-top:10px; }
+  .dot{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+  .note{ font-size:12px; color:var(--dim); line-height:1.6; margin-top:14px; border-top:1px dashed #23262B; padding-top:12px; }
+  .footer{ text-align:center; color:var(--dim); font-family:var(--mono); font-size:11px; margin-top:20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Living Lab · Model Collapse Detector</div>
+  <h1 id="title">구라 판별기</h1>
+  <div class="sub">텍스트를 넣으면 재귀학습으로 인한 "언어모델 붕괴" 신호를 탐지합니다. 저자원 언어(한국어)는 조사 다양성 붕괴에 특히 취약합니다.</div>
+
+  <div class="card" id="card">
+    <h2>텍스트 진단</h2>
+    <textarea id="input" placeholder="검사할 텍스트를 붙여넣으세요...">오늘 오늘 오늘 좋아 좋아 좋아 산책 산책 nice day 좋아 park park 좋아 좋아 좋아</textarea>
+    <button onclick="run()">분석하기</button>
+    <div class="result" id="result">
+      <div class="score-row">
+        <div class="score-num" id="scoreNum">0%</div>
+        <div class="score-label">COLLAPSE PROBABILITY</div>
+      </div>
+      <div class="bar"><div class="bar-fill" id="barFill" style="width:0%"></div></div>
+      <div class="features" id="features"></div>
+      <ul class="tips" id="tips"></ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>실험 결과 — 재귀학습 5세대</h2>
+    <div class="sub" style="margin-bottom:14px;">NSMC(한국어 영화리뷰) vs Rotten Tomatoes(영어 영화리뷰), 동일 도메인 원본에서 출발해 2-gram 마르코프 체인으로 5세대 재귀 재생성. 값은 Gen0 대비 붕괴확률 증가폭(%p) — 언어 간 절대값 편향을 제거한 공정 비교.</div>
+    <svg viewBox="0 0 640 300" width="100%" style="overflow:visible;">
+      <line x1="50" y1="260" x2="620" y2="260" stroke="#23262B"/>
+      <line x1="50" y1="20" x2="50" y2="260" stroke="#23262B"/>
+      <text x="20" y="264" font-family="ui-monospace" font-size="10" fill="#8A8F98">0%p</text>
+      <text x="14" y="184" font-family="ui-monospace" font-size="10" fill="#8A8F98">20%p</text>
+      <text x="14" y="104" font-family="ui-monospace" font-size="10" fill="#8A8F98">40%p</text>
+      <text x="14" y="24" font-family="ui-monospace" font-size="10" fill="#8A8F98">60%p</text>
+      <line x1="50" y1="180" x2="620" y2="180" stroke="#1A1D22"/>
+      <line x1="50" y1="100" x2="620" y2="100" stroke="#1A1D22"/>
+
+      <polyline points="50,260 164,147.2 278,127.6 392,62.4 506,45.6 620,44.8" fill="none" stroke="#E85C4A" stroke-width="2.5"/>
+      <polyline points="50,260 164,199.6 278,174.4 392,158.4 506,148.4 620,141.6" fill="none" stroke="#4FD1A5" stroke-width="2.5"/>
+
+      <g fill="#E85C4A">
+        <circle cx="50" cy="260" r="3.5"/><circle cx="164" cy="147.2" r="3.5"/><circle cx="278" cy="127.6" r="3.5"/>
+        <circle cx="392" cy="62.4" r="3.5"/><circle cx="506" cy="45.6" r="3.5"/><circle cx="620" cy="44.8" r="3.5"/>
+      </g>
+      <g fill="#4FD1A5">
+        <circle cx="50" cy="260" r="3.5"/><circle cx="164" cy="199.6" r="3.5"/><circle cx="278" cy="174.4" r="3.5"/>
+        <circle cx="392" cy="158.4" r="3.5"/><circle cx="506" cy="148.4" r="3.5"/><circle cx="620" cy="141.6" r="3.5"/>
+      </g>
+
+      <text x="620" y="38" text-anchor="end" font-family="ui-monospace" font-size="11" fill="#E85C4A">KO +53.8%p</text>
+      <text x="620" y="135" text-anchor="end" font-family="ui-monospace" font-size="11" fill="#4FD1A5">EN +29.6%p</text>
+
+      <g font-family="ui-monospace" font-size="10" fill="#8A8F98">
+        <text x="50" y="278" text-anchor="middle">Gen0</text>
+        <text x="164" y="278" text-anchor="middle">Gen1</text>
+        <text x="278" y="278" text-anchor="middle">Gen2</text>
+        <text x="392" y="278" text-anchor="middle">Gen3</text>
+        <text x="506" y="278" text-anchor="middle">Gen4</text>
+        <text x="620" y="278" text-anchor="middle">Gen5</text>
+      </g>
+    </svg>
+    <div class="legend">
+      <span><span class="dot" style="background:#E85C4A;"></span>한국어 (NSMC)</span>
+      <span><span class="dot" style="background:#4FD1A5;"></span>영어 (Rotten Tomatoes)</span>
+    </div>
+    <div class="note">
+      ⚠ 방법론 노트: 실제 LLM 재귀 파인튜닝이 아닌 2-gram 마르코프 체인 기반 "적합→재샘플링" 경량 시뮬레이션(proxy)입니다. 방향성(저자원 언어가 더 빠르게 무너짐)은 Shumailov et al. (2024)의 이론적 메커니즘과 일치하지만, 실제 LLM 스케일에서의 정량적 수치로 해석하면 과장입니다.
+    </div>
+  </div>
+
+  <div class="footer">Living Lab Hackathon · Model Collapse in Low-Resource Languages</div>
+</div>
+
+<script>
+const PARTICLES = ["은","는","이","가","을","를","에서","에게","께","와","과","도","만","의","으로","로","부터","까지","보다","처럼","한테","께서","마저","조차","밖에"];
+
+function computeFeatures(text){
+  text = text.trim();
+  const words = text.split(/\s+/).filter(Boolean);
+  const n = words.length || 1;
+  const ttr = new Set(words).size / n;
+  let repRate = 0;
+  if (words.length >= 3){
+    const trigrams = [];
+    for(let i=0;i<=words.length-3;i++) trigrams.push(words.slice(i,i+3).join(' '));
+    repRate = 1 - (new Set(trigrams).size / trigrams.length);
+  }
+  const found = new Set(PARTICLES.filter(p => text.includes(p)));
+  const particleDiversity = found.size / PARTICLES.length;
+  const letters = text.match(/[a-zA-Z가-힣]/g) || [];
+  const eng = text.match(/[a-zA-Z]/g) || [];
+  const codeSwitch = letters.length ? eng.length/letters.length : 0;
+  return {ttr, repRate, particleDiversity, codeSwitch};
+}
+function collapseProbability(f){
+  let score = (1-f.ttr)*0.3;
+  score += f.repRate*0.35;
+  score += (1-f.particleDiversity)*0.2;
+  score += Math.min(f.codeSwitch*2,1)*0.15;
+  return Math.min(score,1);
+}
+function recommend(f){
+  const tips = [];
+  if (f.ttr < 0.5) tips.push("어휘 다양성 낮음 → 모두의말뭉치 등 원본 코퍼스 보강 권장");
+  if (f.repRate > 0.3) tips.push("문장 반복 심함 → 사람이 작성한 원본 텍스트 비중 확대 필요");
+  if (f.particleDiversity < 0.3) tips.push("조사 사용 단조로움 → 다양한 문체의 한국어 원본 자료 필요");
+  if (f.codeSwitch > 0.15) tips.push("영어 혼입 높음 → AI Hub 등 한국어 단일언어 코퍼스로 재학습 권장");
+  if (!tips.length) tips.push("특별한 붕괴 신호 없음");
+  return tips;
+}
+function run(){
+  const text = document.getElementById('input').value;
+  const f = computeFeatures(text);
+  const prob = collapseProbability(f);
+  const pct = Math.round(prob*100);
+  document.getElementById('result').classList.add('show');
+  document.getElementById('scoreNum').textContent = pct + '%';
+  const color = pct >= 60 ? 'var(--danger)' : pct >= 30 ? 'var(--warn)' : 'var(--safe)';
+  document.getElementById('scoreNum').style.color = color;
+  const fill = document.getElementById('barFill');
+  fill.style.width = pct + '%';
+  fill.style.background = color;
+  document.getElementById('features').innerHTML = `
+    <div class="feat"><span>어휘 다양성 (TTR)</span><span>${(f.ttr*100).toFixed(1)}%</span></div>
+    <div class="feat"><span>반복률</span><span>${(f.repRate*100).toFixed(1)}%</span></div>
+    <div class="feat"><span>조사 다양성</span><span>${(f.particleDiversity*100).toFixed(1)}%</span></div>
+    <div class="feat"><span>코드스위칭률</span><span>${(f.codeSwitch*100).toFixed(1)}%</span></div>
+  `;
+  document.getElementById('tips').innerHTML = recommend(f).map(t => `<li>${t}</li>`).join('');
+  const card = document.getElementById('card');
+  if (pct >= 60){ card.classList.add('glitch'); card.style.borderColor = 'var(--danger)'; }
+  else { card.classList.remove('glitch'); card.style.borderColor = '#23262B'; }
+}
+run();
+</script>
+</body>
+</html>
