@@ -217,8 +217,8 @@
 <p class="interpretation" id="collapseInterpretation"></p>
 </div>
 <div class="source-compare" id="sourceComparePanel">
-<div class="micro-label">원문과 직접 비교한 결과</div>
-<div class="loss-number"><span id="sourceLoss">—</span><small>원문과 달라진 정도</small></div>
+<div class="micro-label">원문과 직접 비교한 결과</div><div style="font-size:11px;color:var(--dim);margin-bottom:7px">한국어 조사·어미 차이는 같은 단어로 보고, 숫자와 문맥 연결은 따로 계산합니다.</div>
+<div class="loss-number"><span id="sourceLoss">—</span><small>원문과의 표면 차이</small></div>
 <div class="mini-score-grid" id="compareMetrics"></div>
 </div>
 </div>
@@ -559,17 +559,43 @@ function scoreFeatures(f){
 }
 function escapeHTML(s){return String(s).replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]))}
 function extractNumbers(text){return [...new Set((text.match(/\d+(?:[.,]\d+)*(?:\s?(?:%|년|월|일|배|명|개|원|km|m|MB|GB|TB|M|B))?/g)||[]).map(x=>x.trim()))].slice(0,6)}
+const MATCH_PARTICLES=['으로부터','에게서','에서는','으로는','이라는','이라고','이라','에서','으로','에게','까지','부터','보다','처럼','한테','께서','마저','조차','밖에','에는','에도','은','는','이','가','을','를','와','과','도','만','의','로','에'];
+const MATCH_ENDINGS=['했습니다','하였다','했다','한다','하는','하고','하며','해서','되어','되며','된다','됐','된','이다','이었다','있는','있다','없다','같다','할','한'];
+function matchToken(w){
+  let k=normToken(w);
+  if(/[가-힣]/.test(k)){
+    for(const s of MATCH_PARTICLES){if(k.endsWith(s)&&k.length-s.length>=2){k=k.slice(0,-s.length);break}}
+    for(const s of MATCH_ENDINGS){if(k.endsWith(s)&&k.length-s.length>=2){k=k.slice(0,-s.length);break}}
+  }
+  return k;
+}
+function charBigrams(s){const out=new Set();if(s.length<2){if(s)out.add(s);return out}for(let i=0;i<s.length-1;i++)out.add(s.slice(i,i+2));return out}
+function tokenSimilarity(a,b){
+  a=matchToken(a);b=matchToken(b);if(!a||!b)return 0;if(a===b)return 1;
+  if(Math.min(a.length,b.length)>=2&&(a.includes(b)||b.includes(a)))return .9;
+  if(Math.min(a.length,b.length)<3)return 0;
+  const A=charBigrams(a),B=charBigrams(b);let inter=0;A.forEach(x=>{if(B.has(x))inter++});const union=new Set([...A,...B]).size;
+  return union?inter/union:0;
+}
+function hasSoftMatch(word,tokens,threshold=.62){for(const t of tokens){if(tokenSimilarity(word,t)>=threshold)return true}return false}
 function extractKeywords(text,limit=8){
   const raw=text.match(/[가-힣]{2,}|[A-Za-z][A-Za-z0-9._-]{2,}|\d+(?:[.,]\d+)?/g)||[];
-  const freq={};const first={};raw.forEach((w,i)=>{const k=normToken(w);if(!k||STOPWORDS.has(k)||k.length<2)return;freq[k]=(freq[k]||0)+1;if(first[k]===undefined)first[k]=i});
-  return Object.keys(freq).sort((a,b)=>((b.length+3/freq[b])-(a.length+3/freq[a]))||(first[a]-first[b])).slice(0,limit);
+  const freq={},first={};
+  raw.forEach((w,i)=>{const k=matchToken(w);if(!k||STOPWORDS.has(k)||k.length<2)return;freq[k]=(freq[k]||0)+1;if(first[k]===undefined)first[k]=i});
+  const total=Math.max(raw.length,1);
+  return Object.keys(freq).sort((a,b)=>{
+    const sa=Math.log1p(freq[a])*2+Math.min(a.length,8)*.22+(/\d/.test(a)?1.2:0)+Math.max(0,1-first[a]/total);
+    const sb=Math.log1p(freq[b])*2+Math.min(b.length,8)*.22+(/\d/.test(b)?1.2:0)+Math.max(0,1-first[b]/total);
+    return sb-sa||first[a]-first[b];
+  }).slice(0,limit);
 }
 function extractClaims(text,limit=4){
   const sentences=text.split(/(?<=[.!?。])\s+|\n+/).map(s=>s.trim()).filter(s=>s.length>=12);
   const keys=extractKeywords(text,12);
   const scored=sentences.map((s,i)=>{
     const nums=(s.match(/\d+(?:[.,]\d+)*(?:\s?(?:%|년|월|일|배|명|개|원))?/g)||[]).length;
-    const keyHits=keys.filter(k=>normToken(s).includes(normToken(k))).length;
+    const st=tokenize(s).map(matchToken);
+    const keyHits=keys.filter(k=>hasSoftMatch(k,st)).length;
     const quote=/[“”"']/g.test(s)?1:0;
     const score=nums*3+keyHits*1.25+quote+Math.min(s.length/90,1.5)-i*.01;
     return {s,score};
@@ -588,18 +614,32 @@ function findPhrase(text){
   const pick=ranked[0]||{words:tokenize(sentences[0])};return pick.words.slice(0,7).join(' ');
 }
 function compareToSource(current,source){
-  const curTokens=tokenize(current).map(normToken).filter(Boolean), srcTokens=tokenize(source).map(normToken).filter(Boolean);
-  const curSet=new Set(curTokens), srcSet=new Set(srcTokens);
+  const curTokens=tokenize(current).map(matchToken).filter(k=>k&&k.length>=2&&!STOPWORDS.has(k));
+  const srcTokens=tokenize(source).map(matchToken).filter(k=>k&&k.length>=2&&!STOPWORDS.has(k));
   const srcKeys=extractKeywords(source,12), curKeys=extractKeywords(current,12);
-  const keyRetention=srcKeys.length?srcKeys.filter(k=>curSet.has(normToken(k))).length/srcKeys.length:1;
+
+  // 핵심 단어: 조사/어미 차이와 가벼운 표기 차이는 같은 말로 본다.
+  const keyRetention=srcKeys.length?srcKeys.filter(k=>hasSoftMatch(k,curTokens)).length/srcKeys.length:1;
+
+  // 숫자·날짜는 정확히 보존됐는지 별도로 본다.
   const srcNums=extractNumbers(source), curNums=new Set(extractNumbers(current).map(x=>x.replace(/\s/g,'')));
   const numRetention=srcNums.length?srcNums.filter(n=>curNums.has(n.replace(/\s/g,''))).length/srcNums.length:null;
+
+  // 문맥 연결: 원문의 '연속된 두 단어'가 현재 글에도 남아 있는지 본다.
   const srcBigrams=[];for(let i=0;i<srcTokens.length-1;i++)srcBigrams.push(srcTokens[i]+' '+srcTokens[i+1]);
   const curBigrams=new Set();for(let i=0;i<curTokens.length-1;i++)curBigrams.add(curTokens[i]+' '+curTokens[i+1]);
-  const bigramRetention=srcBigrams.length?srcBigrams.filter(g=>curBigrams.has(g)).length/srcBigrams.length:1;
-  const newTermRatio=curKeys.length?curKeys.filter(k=>!srcSet.has(normToken(k))).length/curKeys.length:0;
-  const preservation=numRetention===null?(keyRetention*.72+bigramRetention*.28):(keyRetention*.5+numRetention*.32+bigramRetention*.18);
-  return {loss:Math.round((1-preservation)*100),keyRetention,numRetention,bigramRetention,newTermRatio};
+  const contextRetention=srcBigrams.length?srcBigrams.filter(g=>curBigrams.has(g)).length/srcBigrams.length:1;
+
+  // 전체 내용 단서: 원문에서 의미 있는 단어 종류가 얼마나 남았는지.
+  const srcUnique=[...new Set(srcTokens)];
+  const contentRetention=srcUnique.length?srcUnique.filter(k=>hasSoftMatch(k,curTokens)).length/srcUnique.length:1;
+  const newTermRatio=curKeys.length?curKeys.filter(k=>!hasSoftMatch(k,srcTokens)).length/curKeys.length:0;
+
+  // '원문과의 표면 차이'는 의미 손실률이 아니라 단서/숫자/문맥 연결의 변화량이다.
+  const preservation=numRetention===null
+    ? keyRetention*.34+contextRetention*.50+contentRetention*.16
+    : keyRetention*.28+numRetention*.17+contextRetention*.45+contentRetention*.10;
+  return {loss:Math.round((1-preservation)*100),keyRetention,numRetention,contextRetention,contentRetention,newTermRatio};
 }
 function buildSearchQueries(text){
   const keys=extractKeywords(text,8), nums=extractNumbers(text), phrase=findPhrase(text);
@@ -624,12 +664,12 @@ function renderComparison(current,source){
   const panel=document.getElementById('sourceComparePanel');
   if(!source.trim()){
     panel.classList.add('no-source');document.getElementById('sourceLoss').textContent='—';
-    document.getElementById('compareMetrics').innerHTML='<div class="mini-score"><b>원문 필요</b><span>원문과 달라진 정도</span></div><div class="mini-score"><b>—</b><span>핵심 단어가 남은 정도</span></div><div class="mini-score"><b>—</b><span>숫자·날짜가 남은 정도</span></div>';
+    document.getElementById('compareMetrics').innerHTML='<div class="mini-score"><b>원문 필요</b><span>원문과의 표면 차이</span></div><div class="mini-score"><b>—</b><span>핵심 단서 보존</span></div><div class="mini-score"><b>—</b><span>문맥 연결 보존</span></div>';
     return null;
   }
   panel.classList.remove('no-source');const c=compareToSource(current,source);document.getElementById('sourceLoss').textContent=c.loss+'%';
   const n=c.numRetention===null?'해당 없음':Math.round(c.numRetention*100)+'%';
-  document.getElementById('compareMetrics').innerHTML=`<div class="mini-score"><b>${Math.round(c.keyRetention*100)}%</b><span>핵심 단어가 남은 정도</span></div><div class="mini-score"><b>${n}</b><span>숫자·날짜 보존</span></div><div class="mini-score"><b>${Math.round(c.newTermRatio*100)}%</b><span>원문에 없던 핵심 단어</span></div>`;
+  document.getElementById('compareMetrics').innerHTML=`<div class="mini-score"><b>${Math.round(c.keyRetention*100)}%</b><span>핵심 단서 보존</span></div><div class="mini-score"><b>${n}</b><span>숫자·날짜 보존</span></div><div class="mini-score"><b>${Math.round(c.contextRetention*100)}%</b><span>문맥 연결 보존</span></div>`;
   return c;
 }
 let lastSummary='';
@@ -660,9 +700,9 @@ function analyze(){
   if(score>=60) summary='반복과 단순화가 꽤 강하게 보여서, 이미 정보가 많이 흐려진 글일 가능성이 큽니다.';
   else if(score>=30) summary='아직 읽을 만하지만, 반복·축약·언어 섞임 같은 흐려짐 신호가 어느 정도 보입니다.';
   else summary='눈에 띄는 이상 신호는 크지 않습니다. 다만 사실 여부는 원문으로 따로 확인하는 것이 좋습니다.';
-  if(comp) summary+=` 원문과 비교하면 약 ${comp.loss}% 정도 달라져 보이고, 핵심 단어는 ${Math.round(comp.keyRetention*100)}% 정도 남아 있습니다.`;
+  if(comp) summary+=` 원문과의 표면 차이는 약 ${comp.loss}%이고, 핵심 단서는 ${Math.round(comp.keyRetention*100)}% 남아 있지만 문맥 연결은 ${Math.round(comp.contextRetention*100)}% 정도만 유지됩니다.`;
   else summary+=' 원문이 없다면 아래 검색 가이드로 먼저 원래 자료를 찾아 보세요.';
-  const nextAction=comp? '다음 행동: 숫자·날짜가 그대로 남았는지와 원문에 없던 핵심 단어가 늘었는지 같이 확인해 보세요.' : '다음 행동: 아래 검색어를 복사해 정부·대학·연구기관 자료부터 찾아보세요.';
+  const nextAction=comp? '다음 행동: 숫자가 남아 있어도 앞뒤 설명이 사라질 수 있습니다. 핵심 단서와 문맥 연결을 함께 확인해 보세요.' : '다음 행동: 아래 검색어를 복사해 정부·대학·연구기관 자료부터 찾아보세요.';
   document.getElementById('friendlySummary').innerHTML=`<b>한눈에 요약</b>${summary}<br>${nextAction}`;
   lastSummary=`정보 확인 필요도 ${score}/100. ${summary} ${nextAction}`;
 }
@@ -709,24 +749,8 @@ document.querySelectorAll('.upload-box').forEach(box=>{
 });
 
 const textInput=document.getElementById('textInput'),sourceInput=document.getElementById('sourceInput');
-const GEN0_TEXT=`재귀학습과 정보 붕괴에 대한 설명
-
-2024년 3월 18일, 서울의 한 연구팀은 인공지능 모델이 자신이 생성한 데이터를 반복해서 학습할 때 정보의 품질이 어떻게 변하는지 확인하기 위해 17개의 자료를 분석했다.
-
-연구팀은 사람이 작성한 원본 자료와 인공지능이 만든 자료를 구분하여 살펴보았다. 처음에는 모델이 원본 자료를 바탕으로 비교적 자연스럽고 구체적인 문장을 생성했지만, 생성된 결과를 다시 학습 자료로 사용하고 이 과정을 여러 차례 반복하자 점차 변화가 나타났다.
-
-가장 먼저 확인된 변화는 표현의 다양성 감소였다. 초기 문장에서는 같은 의미를 여러 방식으로 설명하고 구체적인 조건이나 배경도 함께 제시했지만, 반복 학습이 진행될수록 자주 등장하는 단어와 표현이 더 많이 사용되었다. 그 결과 문장은 단순해지고 비슷한 구조가 반복되는 경향을 보였다.
-
-이 자료에서 중요한 핵심 정보는 다음과 같다. 기록 시점은 2024년 3월 18일, 연구 장소는 서울, 분석 자료 수는 17개, 주요 관찰은 표현 다양성 감소와 문맥 정보 손실, 그리고 언어 불안정성이다.`;
-const GEN8_TEXT=`정보 정보 the model 은 is the 정보에 대한 설명을 설명 설명하고 있다.
-한국어 문장은 점점 the text 의 일부가 되고, 의미 의미는 same same 구조 안에서 반복된다.
-이 자료는 2024년 3월 18일에 기록되었다고 하지만 18일 18일 3월 the year 정보가 다시 다시 나타난다.
-
-the system 은 학습 학습 data 를 사용했고, data data 는 model output 에서 다시 만들어졌다.
-결과 결과 결과는 좋은 결과라고 설명하지만, 무엇이 좋은지에 대한 내용은 줄어든다.
-서울 서울의 연구팀은 17개의 자료를 분석했다고 한다. 하지만 17 17 17 자료와 2024 2024 정보가 반복될 뿐, 어떤 자료인지 설명은 사라진다.
-
-정보 손실은 the information in the text 의 감소 감소와 관련 있다. 원래 문장은 다양한 표현을 사용했지만, 지금 문장은 같은 말 같은 말 같은 말로 변한다.`;
+const GEN0_TEXT="재귀학습과 정보 붕괴에 대한 설명\n\n2024년 3월 18일, 서울의 한 연구팀은 인공지능 모델이 자신이 생성한 데이터를 반복해서 학습할 때 정보의 품질이 어떻게 변하는지 확인하기 위해 17개의 자료를 분석했다.\n\n연구팀은 사람이 작성한 원본 자료와 인공지능이 만든 자료를 구분하여 살펴보았다. 처음에는 모델이 원본 자료를 바탕으로 비교적 자연스럽고 구체적인 문장을 생성했지만, 생성된 결과를 다시 학습 자료로 사용하고 이 과정을 여러 차례 반복하자 점차 변화가 나타났다.\n\n가장 먼저 확인된 변화는 표현의 다양성 감소였다. 초기 문장에서는 같은 의미를 여러 방식으로 설명하고 구체적인 조건이나 배경도 함께 제시했지만, 반복 학습이 진행될수록 자주 등장하는 단어와 표현이 더 많이 사용되었다. 그 결과 문장은 단순해지고 비슷한 구조가 반복되는 경향을 보였다.\n\n두 번째 변화는 문맥 정보의 손실이었다. 날짜, 장소, 자료의 수처럼 눈에 잘 띄는 정보는 일부 남아 있었지만, 그 숫자가 무엇을 의미하는지 설명하는 주변 내용이 줄어들었다. 예를 들어 '17개의 자료를 분석했다'는 숫자 자체는 남아 있어도 어떤 자료를 어떤 기준으로 분석했는지에 관한 설명은 사라질 수 있었다.\n\n세 번째 변화는 언어의 불안정성이었다. 한국어 중심으로 작성된 자료에서도 반복 학습이 계속되면 영어 단어나 짧은 영어 표현이 섞이는 경우가 늘어났다. 이는 단순한 번역 문제가 아니라 모델이 특정 언어의 문장 구조와 표현을 안정적으로 유지하지 못하는 현상으로 볼 수 있다.\n\n연구팀은 이러한 결과를 통해 인공지능이 만든 자료만 계속해서 재사용하면 정보가 완전히 사라지기 전에 먼저 표현의 폭이 좁아지고, 문맥이 약해지며, 특정 단어나 문장 구조가 지나치게 반복될 수 있다고 설명했다.\n\n따라서 인공지능 학습 자료를 구성할 때는 사람이 작성한 원본 자료를 충분히 포함하고, 출처와 작성 시점, 구체적인 조건을 함께 보존하는 것이 중요하다. 또한 결과를 확인할 때는 단순히 문장이 자연스러운지만 보는 것이 아니라, 원래 정보의 핵심 내용과 근거가 얼마나 유지되었는지도 비교해야 한다.\n\n이 자료에서 중요한 핵심 정보는 다음과 같다.\n- 기록 시점: 2024년 3월 18일\n- 연구 장소: 서울\n- 분석 자료 수: 17개\n- 주요 관찰: 표현 다양성 감소, 문맥 정보 손실, 언어 불안정성\n- 핵심 원인: 인공지능이 생성한 자료를 반복해서 다시 학습에 사용하는 과정\n- 권장 방법: 사람이 작성한 원본 자료와 출처 정보를 함께 보존하기";
+const GEN8_TEXT="정보 정보 the model 은 is the 정보에 대한 설명을 설명 설명하고 있다.\n한국어 문장은 점점 the text 의 일부가 되고, 의미 의미는 same same 구조 안에서 반복된다.\n이 자료는 2024년 3월 18일에 기록되었다고 하지만 18일 18일 3월 the year 정보가 다시 다시 나타난다.\n\nthe system 은 학습 학습 data 를 사용했고, data data 는 model output 에서 다시 만들어졌다.\n결과 결과 결과는 좋은 결과라고 설명하지만, 무엇이 좋은지에 대한 내용은 줄어든다.\n한국어 정보는 the information of the model 안에서 일부 일부 남고, 나머지는 english words and fragments 로 바뀐다.\n\n연구 연구 연구 결과에 따르면 model 은 데이터를 반복해서 사용 사용 사용한다.\nthe data is the data and the result is the result.\n결과는 결과를 만들고, 결과 결과는 다시 data 가 된다.\n이 과정 과정 과정에서 문장 구조는 the of in and the 같은 짧은 표현으로 모인다.\n\n서울 서울의 연구팀은 17개의 자료를 분석했다고 한다.\n하지만 17 17 17 자료와 2024 2024 정보가 반복될 뿐, 어떤 자료인지 설명은 사라진다.\nThe study was in the model and the model was in the study.\n한국어는 있다 있다 있다, 연구는 했다 했다, 결과는 결과 결과이다.\n\n정보 손실은 the information in the text 의 감소 감소와 관련 있다.\n문장의 핵심 핵심은 정확성, 출처, 조건이라고 했지만 조건 condition condition 만 남는다.\n원래 문장은 다양한 표현을 사용했지만, 지금 문장은 같은 말 같은 말 같은 말로 변한다.\n\nthe model the model the model 은 다시 생성한다.\ndata from output, output from data, data from output.\n연구 결과 결과 연구 결과 결과 연구.\n한국어 한국어는 일부만 남고 the words are more common common common.\n\n2024년 2024년 3월 3월 18일 18일.\n서울 Seoul 서울 model model.\n17 17 17 자료 자료.\n정보 정보 결과 결과 data data.\nthe the of of in in and and.\n있다 있다 있다 결과이다 결과이다.\n연구 연구 연구 model output output output.\n\n마지막 정보는 원래 의미를 정확히 설명하지 못한다.\nThe final text has words but less meaning, less context, less source.\n정보는 남아 있지만 정보 정보 정보의 연결은 약해지고,\n결과 결과 result result the model 의 문장으로 반복된다.";
 function updateCount(){document.getElementById('wordCount').textContent=tokenize(textInput.value).length+'단어';const n=tokenize(sourceInput.value).length;document.getElementById('sourceWordCount').textContent=n?n+'단어':'원문 미입력'}
 textInput.addEventListener('input',updateCount);sourceInput.addEventListener('input',updateCount);document.getElementById('analyzeBtn').addEventListener('click',analyze);document.getElementById('clearSourceBtn').addEventListener('click',()=>{sourceInput.value='';document.getElementById('sourceFile').value='';const st=document.getElementById('sourceFileStatus');st.className='file-status';st.textContent='파일이 없다면 이 칸은 건너뛰어도 됩니다. PDF·DOCX도 올릴 수 있습니다.';updateCount();analyze();showToast('원문 칸을 비웠습니다.')});
 document.getElementById('swapBtn').addEventListener('click',()=>{const temp=textInput.value;textInput.value=sourceInput.value;sourceInput.value=temp;updateCount();showToast('현재 정보와 원문 칸을 바꿨습니다.');});
