@@ -6,120 +6,238 @@
 <title>구라 판별기 — 언어모델 붕괴 탐지</title>
 <style>
   :root{
-    --bg:#0B0D10; --panel:#14171B; --text:#E8E6E1; --dim:#8A8F98;
-    --safe:#4FD1A5; --warn:#F2A93B; --danger:#E85C4A;
-    --mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+    --bg:#0B0E13; --panel:#12161C; --rule:#23282F;
+    --text:#ECE8E0; --dim:#767C86;
+    --stable:#5FD9A0; --signal:#E8A33D; --decay:#FF5A46; --decay2:#FF8A5C;
+    --serif: 'Nanum Myeongjo', 'Batang', 'AppleMyungjo', Georgia, 'Iowan Old Style', serif;
+    --mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
     --sans: -apple-system, 'Pretendard', 'Apple SD Gothic Neo', sans-serif;
   }
   *{box-sizing:border-box;}
-  body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); padding:24px; }
+  html{ -webkit-font-smoothing:antialiased; }
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); padding:32px 24px 60px; }
   .wrap{ max-width:760px; margin:0 auto; }
-  .eyebrow{ font-family:var(--mono); font-size:12px; letter-spacing:0.15em; color:var(--dim); text-transform:uppercase; margin-bottom:8px; }
-  h1{ font-family:var(--mono); font-size:28px; margin:0 0 6px; font-weight:700; letter-spacing:-0.01em; }
-  h2{ font-family:var(--mono); font-size:16px; margin:0 0 4px; color:var(--text); }
-  .sub{ color:var(--dim); font-size:14px; margin-bottom:28px; line-height:1.6; }
-  .card{ background:var(--panel); border:1px solid #23262B; border-radius:12px; padding:24px; margin-bottom:24px; transition:filter 0.4s ease, border-color 0.4s ease; }
-  textarea{ width:100%; min-height:120px; background:#0E1013; color:var(--text); border:1px solid #23262B; border-radius:8px; padding:14px; font-family:var(--sans); font-size:14px; line-height:1.6; resize:vertical; }
-  textarea:focus{ outline:none; border-color:var(--warn); }
-  button{ margin-top:12px; background:var(--text); color:var(--bg); border:none; font-family:var(--mono); font-weight:700; font-size:13px; padding:12px 20px; border-radius:8px; cursor:pointer; letter-spacing:0.02em; }
-  button:hover{ opacity:0.85; }
-  .result{ margin-top:24px; display:none; }
+
+  .eyebrow{ font-family:var(--mono); font-size:11px; letter-spacing:0.18em; color:var(--dim); text-transform:uppercase; margin-bottom:14px; display:flex; align-items:center; gap:10px; }
+  .eyebrow::before{ content:''; width:14px; height:1px; background:var(--rule); display:inline-block; }
+
+  h1{ font-family:var(--serif); font-size:44px; font-weight:700; margin:0 0 18px; letter-spacing:-0.01em; }
+
+  .hero-decay{ font-family:var(--mono); font-size:14px; color:var(--dim); display:flex; align-items:center; gap:10px; margin-bottom:36px; min-height:20px; }
+  .hero-decay .tag{ font-size:10px; padding:2px 6px; border-radius:3px; letter-spacing:0.05em; flex-shrink:0; transition:background 0.5s, color 0.5s; }
+  .hero-decay .txt{ transition:opacity 0.35s ease; }
+
+  h2{ font-family:var(--serif); font-size:20px; margin:0 0 4px; color:var(--text); font-weight:700; }
+  h3{ font-family:var(--mono); font-size:12.5px; color:var(--text); margin:0 0 10px; letter-spacing:0.02em; }
+  .sec-num{ font-family:var(--mono); font-size:11px; color:var(--dim); letter-spacing:0.1em; margin-bottom:6px; }
+  .sub{ color:var(--dim); font-size:13.5px; margin-bottom:22px; line-height:1.7; }
+
+  section{ margin-bottom:56px; }
+  .card{ border:1px solid var(--rule); border-radius:10px; padding:28px; background:linear-gradient(180deg, rgba(255,255,255,0.015), transparent); transition:border-color 0.4s ease; margin-bottom:20px; }
+
+  textarea{ width:100%; min-height:120px; background:var(--panel); color:var(--text); border:1px solid var(--rule); border-radius:6px; padding:14px; font-family:var(--sans); font-size:14px; line-height:1.7; resize:vertical; }
+  textarea:focus{ outline:none; border-color:var(--signal); }
+
+  button{ margin-top:14px; background:transparent; color:var(--text); border:1px solid var(--text); font-family:var(--mono); font-weight:700; font-size:12px; padding:11px 22px; border-radius:6px; cursor:pointer; letter-spacing:0.08em; text-transform:uppercase; transition:background 0.2s, color 0.2s; }
+  button:hover{ background:var(--text); color:var(--bg); }
+
+  .result{ margin-top:28px; display:none; }
   .result.show{ display:block; }
-  .score-row{ display:flex; align-items:baseline; gap:12px; margin-bottom:6px; }
-  .score-num{ font-family:var(--mono); font-size:42px; font-weight:700; }
-  .score-label{ color:var(--dim); font-size:13px; font-family:var(--mono); }
-  .bar{ height:8px; background:#0E1013; border-radius:4px; overflow:hidden; margin-bottom:20px; }
+  .score-row{ display:flex; align-items:baseline; gap:14px; margin-bottom:8px; }
+  .score-num{ font-family:var(--serif); font-size:48px; font-weight:700; }
+  .score-label{ color:var(--dim); font-size:11px; font-family:var(--mono); letter-spacing:0.1em; }
+  .bar{ height:6px; background:var(--panel); border-radius:3px; overflow:hidden; margin-bottom:22px; }
   .bar-fill{ height:100%; transition:width 0.6s ease, background 0.6s ease; }
-  .features{ display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; margin-bottom:20px; }
-  .feat{ font-family:var(--mono); font-size:12px; color:var(--dim); display:flex; justify-content:space-between; border-bottom:1px dashed #23262B; padding-bottom:6px; }
+
+  .features{ display:grid; grid-template-columns:1fr 1fr; gap:10px 24px; margin-bottom:22px; }
+  .feat{ font-family:var(--mono); font-size:11.5px; color:var(--dim); display:flex; justify-content:space-between; border-bottom:1px dashed var(--rule); padding-bottom:7px; }
   .feat span:last-child{ color:var(--text); }
+
   .tips{ list-style:none; padding:0; margin:0; }
-  .tips li{ font-size:13px; line-height:1.6; padding:10px 12px; margin-bottom:8px; background:#0E1013; border-left:3px solid var(--warn); border-radius:4px; }
-  .glitch h1{ animation: glitch 0.25s infinite; }
+  .tips li{ font-size:13px; line-height:1.6; padding:11px 14px; margin-bottom:8px; background:var(--panel); border-left:2px solid var(--signal); border-radius:4px; }
+
+  .glitch h2{ animation: glitch 0.25s infinite; }
   @keyframes glitch{
-    0%{ text-shadow: 2px 0 var(--danger), -2px 0 var(--safe); }
-    50%{ text-shadow: -2px 0 var(--danger), 2px 0 var(--safe); }
-    100%{ text-shadow: 2px 0 var(--danger), -2px 0 var(--safe); }
+    0%{ text-shadow: 2px 0 var(--decay), -2px 0 var(--stable); }
+    50%{ text-shadow: -2px 0 var(--decay), 2px 0 var(--stable); }
+    100%{ text-shadow: 2px 0 var(--decay), -2px 0 var(--stable); }
   }
-  .legend{ display:flex; gap:20px; font-family:var(--mono); font-size:12px; margin-top:10px; }
-  .dot{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
-  .note{ font-size:12px; color:var(--dim); line-height:1.6; margin-top:14px; border-top:1px dashed #23262B; padding-top:12px; }
-  .footer{ text-align:center; color:var(--dim); font-family:var(--mono); font-size:11px; margin-top:20px; }
+
+  .stat-row{ display:grid; grid-template-columns:repeat(2,1fr); gap:14px; margin-bottom:22px; }
+  .stat{ background:var(--panel); border:1px solid var(--rule); border-radius:8px; padding:16px; }
+  .stat .k{ font-family:var(--mono); font-size:10.5px; color:var(--dim); letter-spacing:0.04em; margin-bottom:8px; }
+  .stat .v{ font-family:var(--serif); font-size:22px; font-weight:700; }
+  .stat .v.decay{ color:var(--decay); }
+  .stat .v.stable{ color:var(--stable); }
+
+  .legend{ display:flex; flex-wrap:wrap; gap:20px; font-family:var(--mono); font-size:11.5px; margin:12px 0 4px; color:var(--dim); }
+  .dot{ display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:7px; }
+  .note{ font-size:11.5px; color:var(--dim); line-height:1.7; margin-top:16px; border-top:1px solid var(--rule); padding-top:14px; }
+  .note a{ color:var(--signal); }
+  .footer{ text-align:center; color:var(--dim); font-family:var(--mono); font-size:10.5px; margin-top:10px; letter-spacing:0.05em; }
+
+  @media (max-width:480px){
+    h1{ font-size:32px; }
+    .features{ grid-template-columns:1fr; }
+    .stat-row{ grid-template-columns:1fr; }
+    .card{ padding:20px; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="eyebrow">Living Lab · Model Collapse Detector</div>
-  <h1 id="title">구라 판별기</h1>
-  <div class="sub">텍스트를 넣으면 재귀학습으로 인한 "언어모델 붕괴" 신호를 탐지합니다. 저자원 언어(한국어)는 조사 다양성 붕괴에 특히 취약합니다.</div>
+  <h1>구라 판별기</h1>
+  <div class="hero-decay">
+    <span class="tag" id="genTag">GEN 0</span>
+    <span class="txt" id="genTxt">오늘 날씨가 좋아서 친구와 산책을 다녀왔다</span>
+  </div>
 
-  <div class="card" id="card">
+  <section>
+    <div class="sec-num">§01</div>
     <h2>텍스트 진단</h2>
-    <textarea id="input" placeholder="검사할 텍스트를 붙여넣으세요...">오늘 오늘 오늘 좋아 좋아 좋아 산책 산책 nice day 좋아 park park 좋아 좋아 좋아</textarea>
-    <button onclick="run()">분석하기</button>
-    <div class="result" id="result">
-      <div class="score-row">
-        <div class="score-num" id="scoreNum">0%</div>
-        <div class="score-label">COLLAPSE PROBABILITY</div>
+    <div class="sub">문장을 넣으면 재귀학습으로 인한 붕괴 신호를 4개 지표로 분석합니다. 한국어는 조사·어미 다양성 붕괴에 특히 취약합니다.</div>
+    <div class="card" id="card">
+      <textarea id="input" placeholder="검사할 텍스트를 붙여넣으세요...">오늘 오늘 오늘 좋아 좋아 좋아 산책 산책 nice day 좋아 park park 좋아 좋아 좋아</textarea>
+      <button onclick="run()">분석하기</button>
+      <div class="result" id="result">
+        <div class="score-row">
+          <div class="score-num" id="scoreNum">0%</div>
+          <div class="score-label">COLLAPSE PROBABILITY</div>
+        </div>
+        <div class="bar"><div class="bar-fill" id="barFill" style="width:0%"></div></div>
+        <div class="features" id="features"></div>
+        <ul class="tips" id="tips"></ul>
       </div>
-      <div class="bar"><div class="bar-fill" id="barFill" style="width:0%"></div></div>
-      <div class="features" id="features"></div>
-      <ul class="tips" id="tips"></ul>
     </div>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2>실험 결과 — 재귀학습 5세대</h2>
-    <div class="sub" style="margin-bottom:14px;">NSMC(한국어 영화리뷰) vs Rotten Tomatoes(영어 영화리뷰), 동일 도메인 원본에서 출발해 2-gram 마르코프 체인으로 5세대 재귀 재생성. 값은 Gen0 대비 붕괴확률 증가폭(%p) — 언어 간 절대값 편향을 제거한 공정 비교.</div>
-    <svg viewBox="0 0 640 300" width="100%" style="overflow:visible;">
-      <line x1="50" y1="260" x2="620" y2="260" stroke="#23262B"/>
-      <line x1="50" y1="20" x2="50" y2="260" stroke="#23262B"/>
-      <text x="20" y="264" font-family="ui-monospace" font-size="10" fill="#8A8F98">0%p</text>
-      <text x="14" y="184" font-family="ui-monospace" font-size="10" fill="#8A8F98">20%p</text>
-      <text x="14" y="104" font-family="ui-monospace" font-size="10" fill="#8A8F98">40%p</text>
-      <text x="14" y="24" font-family="ui-monospace" font-size="10" fill="#8A8F98">60%p</text>
-      <line x1="50" y1="180" x2="620" y2="180" stroke="#1A1D22"/>
-      <line x1="50" y1="100" x2="620" y2="100" stroke="#1A1D22"/>
+  <section>
+    <div class="sec-num">§02 · 외부 검증</div>
+    <h2>실제 LLM 재귀학습 실험 (35M GPT, 8세대)</h2>
+    <div class="sub">from-scratch GPT(8층, d=512)를 위키피디아 EN 90MB + KO 10MB로 학습 후, 자기 출력만으로 8세대 재귀 재학습. RQ1(한국어가 먼저 무너지는가)·RQ2(영어만 재귀해도 한국어가 간접 붕괴하는가) 모두 확인됨.</div>
 
-      <polyline points="50,260 164,147.2 278,127.6 392,62.4 506,45.6 620,44.8" fill="none" stroke="#E85C4A" stroke-width="2.5"/>
-      <polyline points="50,260 164,199.6 278,174.4 392,158.4 506,148.4 620,141.6" fill="none" stroke="#4FD1A5" stroke-width="2.5"/>
-
-      <g fill="#E85C4A">
-        <circle cx="50" cy="260" r="3.5"/><circle cx="164" cy="147.2" r="3.5"/><circle cx="278" cy="127.6" r="3.5"/>
-        <circle cx="392" cy="62.4" r="3.5"/><circle cx="506" cy="45.6" r="3.5"/><circle cx="620" cy="44.8" r="3.5"/>
-      </g>
-      <g fill="#4FD1A5">
-        <circle cx="50" cy="260" r="3.5"/><circle cx="164" cy="199.6" r="3.5"/><circle cx="278" cy="174.4" r="3.5"/>
-        <circle cx="392" cy="158.4" r="3.5"/><circle cx="506" cy="148.4" r="3.5"/><circle cx="620" cy="141.6" r="3.5"/>
-      </g>
-
-      <text x="620" y="38" text-anchor="end" font-family="ui-monospace" font-size="11" fill="#E85C4A">KO +53.8%p</text>
-      <text x="620" y="135" text-anchor="end" font-family="ui-monospace" font-size="11" fill="#4FD1A5">EN +29.6%p</text>
-
-      <g font-family="ui-monospace" font-size="10" fill="#8A8F98">
-        <text x="50" y="278" text-anchor="middle">Gen0</text>
-        <text x="164" y="278" text-anchor="middle">Gen1</text>
-        <text x="278" y="278" text-anchor="middle">Gen2</text>
-        <text x="392" y="278" text-anchor="middle">Gen3</text>
-        <text x="506" y="278" text-anchor="middle">Gen4</text>
-        <text x="620" y="278" text-anchor="middle">Gen5</text>
-      </g>
-    </svg>
-    <div class="legend">
-      <span><span class="dot" style="background:#E85C4A;"></span>한국어 (NSMC)</span>
-      <span><span class="dot" style="background:#4FD1A5;"></span>영어 (Rotten Tomatoes)</span>
+    <div class="stat-row">
+      <div class="stat"><div class="k">RQ1 · KO/EN PPL 배율 (Gen0→8)</div><div class="v decay">3.9배 → 3,941배</div></div>
+      <div class="stat"><div class="k">RQ2 · 영어만 재귀해도 (간접붕괴)</div><div class="v decay">3.8배 → 20,589배</div></div>
+      <div class="stat"><div class="k">한글 응답률 붕괴 (E1)</div><div class="v decay">12.0% → 0.97%</div></div>
+      <div class="stat"><div class="k">통제군(실데이터 9회 재학습)</div><div class="v stable">~4~5배, 평탄</div></div>
     </div>
+
+    <div class="card">
+      <h3>KO / EN PPL 배율 — 로그 스케일 (Gen0~8)</h3>
+      <svg viewBox="0 0 640 300" width="100%" style="overflow:visible;">
+        <line x1="50" y1="260" x2="620" y2="260" stroke="#23282F"/>
+        <line x1="50" y1="20" x2="50" y2="260" stroke="#23282F"/>
+        <text x="16" y="264" font-family="ui-monospace" font-size="10" fill="#767C86">1×</text>
+        <text x="8" y="207" font-family="ui-monospace" font-size="10" fill="#767C86">10×</text>
+        <text x="2" y="157" font-family="ui-monospace" font-size="10" fill="#767C86">100×</text>
+        <text x="-6" y="104" font-family="ui-monospace" font-size="10" fill="#767C86">1,000×</text>
+        <text x="-10" y="51" font-family="ui-monospace" font-size="10" fill="#767C86">10,000×</text>
+        <line x1="50" y1="206.7" x2="620" y2="206.7" stroke="#171B21"/>
+        <line x1="50" y1="153.3" x2="620" y2="153.3" stroke="#171B21"/>
+        <line x1="50" y1="100" x2="620" y2="100" stroke="#171B21"/>
+        <line x1="50" y1="46.7" x2="620" y2="46.7" stroke="#171B21"/>
+
+        <polyline points="50.0,228.7 121.2,226.6 192.5,225.9 263.8,226.1 335.0,224.0 406.2,222.2 477.5,216.2 548.8,225.1 620.0,223.7" fill="none" stroke="#5FD9A0" stroke-width="2"/>
+        <polyline points="50.0,228.4 121.2,195.2 192.5,168.8 263.8,155.3 335.0,131.9 406.2,127.5 477.5,90.9 548.8,78.1 620.0,68.2" fill="none" stroke="#FF5A46" stroke-width="2.5"/>
+        <polyline points="50.0,228.8 121.2,182.5 192.5,164.6 263.8,147.9 335.0,118.5 406.2,117.6 477.5,69.5 548.8,65.9 620.0,29.9" fill="none" stroke="#FF8A5C" stroke-width="2.5" stroke-dasharray="5,3"/>
+
+        <text x="620" y="62" text-anchor="end" font-family="ui-monospace" font-size="11" fill="#FF5A46">E1 3,941×</text>
+        <text x="620" y="24" text-anchor="end" font-family="ui-monospace" font-size="11" fill="#FF8A5C">E2 20,589×</text>
+        <text x="620" y="218" text-anchor="end" font-family="ui-monospace" font-size="11" fill="#5FD9A0">C1 4.8×</text>
+
+        <g font-family="ui-monospace" font-size="10" fill="#767C86">
+          <text x="50" y="278" text-anchor="middle">Gen0</text>
+          <text x="121.2" y="278" text-anchor="middle">1</text>
+          <text x="192.5" y="278" text-anchor="middle">2</text>
+          <text x="263.8" y="278" text-anchor="middle">3</text>
+          <text x="335" y="278" text-anchor="middle">4</text>
+          <text x="406.2" y="278" text-anchor="middle">5</text>
+          <text x="477.5" y="278" text-anchor="middle">6</text>
+          <text x="548.8" y="278" text-anchor="middle">7</text>
+          <text x="620" y="278" text-anchor="middle">Gen8</text>
+        </g>
+      </svg>
+      <div class="legend">
+        <span><span class="dot" style="background:#FF5A46;"></span>E1 · EN:KO=9:1 재귀</span>
+        <span><span class="dot" style="background:#FF8A5C;"></span>E2 · 영어만 재귀 (간접붕괴)</span>
+        <span><span class="dot" style="background:#5FD9A0;"></span>C1 · 실데이터 통제군</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>한글 응답률 — 언어 이탈 (Gen0~8)</h3>
+      <svg viewBox="0 0 640 300" width="100%" style="overflow:visible;">
+        <line x1="50" y1="260" x2="620" y2="260" stroke="#23282F"/>
+        <line x1="50" y1="20" x2="50" y2="260" stroke="#23282F"/>
+        <text x="24" y="264" font-family="ui-monospace" font-size="10" fill="#767C86">0%</text>
+        <text x="18" y="176" font-family="ui-monospace" font-size="10" fill="#767C86">5%</text>
+        <text x="10" y="90" font-family="ui-monospace" font-size="10" fill="#767C86">10%</text>
+        <line x1="50" y1="174.3" x2="620" y2="174.3" stroke="#171B21"/>
+        <line x1="50" y1="88.6" x2="620" y2="88.6" stroke="#171B21"/>
+
+        <polyline points="50.0,54.0 121.2,158.9 192.5,180.5 263.8,195.4 335.0,202.5 406.2,215.2 477.5,224.3 548.8,235.3 620.0,243.4" fill="none" stroke="#FF5A46" stroke-width="2.5"/>
+        <polyline points="50.0,36.4 121.2,193.2 192.5,201.2 263.8,214.3 335.0,222.4 406.2,233.0 477.5,243.1 548.8,250.0 620.0,255.5" fill="none" stroke="#FF8A5C" stroke-width="2.5" stroke-dasharray="5,3"/>
+
+        <text x="620" y="238" text-anchor="end" font-family="ui-monospace" font-size="11" fill="#FF5A46">E1 0.97%</text>
+        <text x="620" y="270" text-anchor="end" font-family="ui-monospace" font-size="11" fill="#FF8A5C">E2 0.26%</text>
+
+        <g font-family="ui-monospace" font-size="10" fill="#767C86">
+          <text x="50" y="284" text-anchor="middle">Gen0</text>
+          <text x="335" y="284" text-anchor="middle">Gen4</text>
+          <text x="620" y="284" text-anchor="middle">Gen8</text>
+        </g>
+      </svg>
+      <div class="legend">
+        <span><span class="dot" style="background:#FF5A46;"></span>E1</span>
+        <span><span class="dot" style="background:#FF8A5C;"></span>E2 (간접붕괴가 더 빠름)</span>
+      </div>
+      <div class="note">
+        한국어 프롬프트를 줘도 2세대 만에 한글 응답률이 절반 밑으로 떨어지고, 8세대에는 사실상 영어로만 응답 — "붕괴 이전에 언어 자체가 먼저 밀려난다"는 이론과 일치. 흥미롭게도 <b>학습 코퍼스에 한국어가 전혀 없는 E2(영어만 재귀)가 더 빠르게 무너짐</b> — 저자원 언어를 완전히 배제하면 간접 붕괴가 오히려 가속됨.
+      </div>
+    </div>
+
     <div class="note">
-      ⚠ 방법론 노트: 실제 LLM 재귀 파인튜닝이 아닌 2-gram 마르코프 체인 기반 "적합→재샘플링" 경량 시뮬레이션(proxy)입니다. 방향성(저자원 언어가 더 빠르게 무너짐)은 Shumailov et al. (2024)의 이론적 메커니즘과 일치하지만, 실제 LLM 스케일에서의 정량적 수치로 해석하면 과장입니다.
+      출처: <a href="https://github.com/sji09/recursive-collapse-ko" target="_blank" rel="noopener">sji09/recursive-collapse-ko</a> — 35M 파라미터 GPT, ByteLevel BPE 16k, top-p 0.9 합성, 세대당 15M 토큰 재학습("replace" 방식, 붕괴 상한을 보는 설정). 시드 1개·소규모 from-scratch 모델 결과이므로 대형 사전학습 LLM 일반화는 별도 확인 필요.
     </div>
   </div>
+  </section>
 
   <div class="footer">Living Lab Hackathon · Model Collapse in Low-Resource Languages</div>
 </div>
 
 <script>
-const PARTICLES = ["은","는","이","가","을","를","에서","에게","께","와","과","도","만","의","으로","로","부터","까지","보다","처럼","한테","께서","마저","조차","밖에"];
+const decaySteps = [
+  {gen:"GEN 0", txt:"오늘 날씨가 좋아서 친구와 산책을 다녀왔다", color:"#5FD9A0"},
+  {gen:"GEN 1", txt:"오늘 날씨 좋아서 친구랑 산책 다녀왔다", color:"#93D67A"},
+  {gen:"GEN 2", txt:"오늘 오늘 좋아 친구 산책 다녀왔다", color:"#E8A33D"},
+  {gen:"GEN 3", txt:"오늘 오늘 좋아 좋아 산책 산책", color:"#F0813F"},
+  {gen:"GEN 4", txt:"좋아 좋아 산책 산책 좋아 nice", color:"#FF6B4E"},
+  {gen:"GEN 5", txt:"좋아 좋아 좋아 좋아 좋아 좋아", color:"#FF5A46"},
+];
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+if(!prefersReducedMotion){
+  let i = 0;
+  const tagEl = document.getElementById('genTag');
+  const txtEl = document.getElementById('genTxt');
+  setInterval(()=>{
+    i = (i+1) % decaySteps.length;
+    txtEl.style.opacity = 0;
+    setTimeout(()=>{
+      const step = decaySteps[i];
+      tagEl.textContent = step.gen;
+      tagEl.style.background = step.color + '22';
+      tagEl.style.color = step.color;
+      txtEl.textContent = step.txt;
+      txtEl.style.opacity = 1;
+    }, 350);
+  }, 2200);
+  tagEl.style.background = decaySteps[0].color + '22';
+  tagEl.style.color = decaySteps[0].color;
+}
 
+const PARTICLES = ["은","는","이","가","을","를","에서","에게","께","와","과","도","만","의","으로","로","부터","까지","보다","처럼","한테","께서","마저","조차","밖에"];
 function computeFeatures(text){
   text = text.trim();
   const words = text.split(/\s+/).filter(Boolean);
@@ -161,7 +279,7 @@ function run(){
   const pct = Math.round(prob*100);
   document.getElementById('result').classList.add('show');
   document.getElementById('scoreNum').textContent = pct + '%';
-  const color = pct >= 60 ? 'var(--danger)' : pct >= 30 ? 'var(--warn)' : 'var(--safe)';
+  const color = pct >= 60 ? 'var(--decay)' : pct >= 30 ? 'var(--signal)' : 'var(--stable)';
   document.getElementById('scoreNum').style.color = color;
   const fill = document.getElementById('barFill');
   fill.style.width = pct + '%';
@@ -174,11 +292,10 @@ function run(){
   `;
   document.getElementById('tips').innerHTML = recommend(f).map(t => `<li>${t}</li>`).join('');
   const card = document.getElementById('card');
-  if (pct >= 60){ card.classList.add('glitch'); card.style.borderColor = 'var(--danger)'; }
-  else { card.classList.remove('glitch'); card.style.borderColor = '#23262B'; }
+  if (pct >= 60){ card.classList.add('glitch'); card.style.borderColor = 'var(--decay)'; }
+  else { card.classList.remove('glitch'); card.style.borderColor = 'var(--rule)'; }
 }
 run();
 </script>
 </body>
 </html>
-
